@@ -1,11 +1,16 @@
 """
-RH Radar - Lane 1: Undervalued Early (v3 - global clone check + repeat suppression)
-Tokens genuinely in the $15k-$25k mcap range. Every candidate is:
+RH Radar - Lane 1: Undervalued Early (v4 - lowered mcap floor + rug-window guard)
+Tokens genuinely in the $10k-$20k mcap range - lower than before, since
+this is where real early runners live. To offset the extra risk that
+comes with going this low, candidates must also have survived past the
+newest-pool rug window (most instant rugs happen in the first ~10
+minutes) before they're shown. Every candidate is:
   1. Live-verified against DexScreener's own API right before display
   2. Checked for duplicate symbols across the ENTIRE latest batch, not just
      this lane's filtered results (catches a clone sitting in a different
      mcap band than the real token)
-  3. Only re-shown if its mcap has moved meaningfully since the last time
+  3. Old enough to have cleared the immediate rug-pull window
+  4. Only re-shown if its mcap has moved meaningfully since the last time
      you saw it - no more identical repeats clogging every scan
 """
 
@@ -17,9 +22,10 @@ from telegram_alert import send_telegram_alert, format_candidate_message, format
 
 DB_PATH = "/data/rh_radar.db"
 LANE = "undervalued_early"
-MIN_MCAP = 15000
-MAX_MCAP = 25000
+MIN_MCAP = 10000
+MAX_MCAP = 20000
 MIN_LIQUIDITY = 5000
+MIN_AGE_HOURS = 0.17  # ~10 minutes - skips the window where most instant rugs happen
 
 QUERY = """
     WITH latest_collection AS (
@@ -41,6 +47,8 @@ QUERY = """
     WHERE rn = 1
       AND liquidity_usd >= ?
       AND market_cap BETWEEN ? AND ?
+      AND pair_age_hours IS NOT NULL
+      AND pair_age_hours >= ?
     ORDER BY liquidity_usd DESC
 """
 
@@ -49,10 +57,11 @@ if __name__ == "__main__":
     init_alert_history(conn)
 
     latest_ts = conn.execute("SELECT MAX(collected_at) FROM raw_pairs").fetchone()[0]
-    raw_candidates = conn.execute(QUERY, (MIN_LIQUIDITY, MIN_MCAP, MAX_MCAP)).fetchall()
+    raw_candidates = conn.execute(QUERY, (MIN_LIQUIDITY, MIN_MCAP, MAX_MCAP, MIN_AGE_HOURS)).fetchall()
 
     print("RH Radar - Lane 1: Undervalued Early (verified)")
-    print(f"Filters: mcap ${MIN_MCAP:,}-${MAX_MCAP:,}, liquidity >= ${MIN_LIQUIDITY:,}\n")
+    print(f"Filters: mcap ${MIN_MCAP:,}-${MAX_MCAP:,}, liquidity >= ${MIN_LIQUIDITY:,}, "
+          f"age >= {int(MIN_AGE_HOURS * 60)}min\n")
 
     if not raw_candidates:
         print("No candidates in range on this run.")
