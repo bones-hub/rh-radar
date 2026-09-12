@@ -19,7 +19,7 @@ from verify import verify_pair_is_real
 from common import init_alert_history, get_global_duplicate_symbol_details, should_alert, flag_wash_trading_risk, format_duration
 from telegram_alert import send_telegram_alert, format_candidate_message, format_milestone_message
 
-DB_PATH = "rh_radar.db"
+DB_PATH = "/data/rh_radar.db"
 LANE = "launches"
 MIN_LIQUIDITY = 5000
 MAX_AGE_HOURS = 3

@@ -14,7 +14,7 @@ import requests
 from datetime import datetime, timezone
 
 CHAIN_ID = "robinhood"  # DexScreener chainId slug for Robinhood Chain
-DB_PATH = "rh_radar.db"
+DB_PATH = "/data/rh_radar.db"
 MIN_PRINT_LIQUIDITY = 250  # dust pools below this are saved but not printed individually
 
 PROFILES_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
