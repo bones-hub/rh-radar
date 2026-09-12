@@ -16,7 +16,7 @@ Run this after data.py has collected at least one batch.
 import sqlite3
 from datetime import datetime, timezone
 from verify import verify_pair_is_real
-from common import init_alert_history, get_global_duplicate_symbol_details, should_alert, flag_wash_trading_risk, format_duration
+from common import init_alert_history, get_global_duplicate_symbol_details, should_alert, flag_wash_trading_risk, format_duration, record_message_id
 from telegram_alert import send_telegram_alert, format_candidate_message, format_milestone_message
 
 DB_PATH = "/data/rh_radar.db"
@@ -93,12 +93,12 @@ if __name__ == "__main__":
             continue
         print("real.")
 
-        show, is_repeat, times, milestone = should_alert(conn, LANE, symbol, token_address, market_cap, now_iso)
+        show, is_repeat, times, milestone, parent_message_id = should_alert(conn, LANE, symbol, token_address, market_cap, now_iso)
         if not show:
             repeat_skipped += 1
             continue
 
-        verified_results.append((row, is_repeat, times, milestone))
+        verified_results.append((row, is_repeat, times, milestone, parent_message_id))
 
     print()
     if repeat_skipped:
@@ -108,7 +108,7 @@ if __name__ == "__main__":
         print("No new candidates survived this run.")
     else:
         print(f"{len(verified_results)} candidate(s):\n")
-        for row, is_repeat, times, milestone in verified_results:
+        for row, is_repeat, times, milestone, parent_message_id in verified_results:
             (symbol, token_address, pair_address, dex_id, dex_url,
              liquidity_usd, volume_h24, price_change_h24,
              market_cap, pair_age_hours) = row
@@ -139,6 +139,10 @@ if __name__ == "__main__":
                     extra_line, dex_url, "NEW",
                     token_address=token_address, priority=is_priority
                 )
-            send_telegram_alert(message)
+            if milestone:
+                msg_id = send_telegram_alert(message, reply_to_message_id=parent_message_id)
+            else:
+                msg_id = send_telegram_alert(message)
+                record_message_id(conn, token_address, msg_id)
 
     conn.close()

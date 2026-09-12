@@ -57,30 +57,33 @@ def format_compact_number(n):
     return f"${n:,.0f}"
 
 
-def send_telegram_alert(text):
+def send_telegram_alert(text, reply_to_message_id=None):
+    """Sends the alert. Returns the Telegram message_id on success (so
+    later milestone alerts can reply/quote it), or None on failure."""
     if not BOT_TOKEN or not CHAT_ID:
         print("  (Telegram not configured - skipping alert. Set TELEGRAM_BOT_TOKEN "
               "and TELEGRAM_CHAT_ID in your .env file.)")
-        return False
+        return None
+
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False,
+    }
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+        payload["allow_sending_without_reply"] = True
 
     try:
-        resp = requests.post(
-            SEND_URL.format(token=BOT_TOKEN),
-            data={
-                "chat_id": CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=10,
-        )
+        resp = requests.post(SEND_URL.format(token=BOT_TOKEN), data=payload, timeout=10)
         if resp.status_code != 200:
             print(f"  (Telegram alert failed: {resp.status_code} {resp.text[:200]})")
-            return False
-        return True
+            return None
+        return resp.json().get("result", {}).get("message_id")
     except requests.RequestException as e:
         print(f"  (Telegram alert failed: {e})")
-        return False
+        return None
 
 
 def format_candidate_message(lane_label, symbol, liquidity_usd, volume_h24,
