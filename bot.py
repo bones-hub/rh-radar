@@ -21,10 +21,11 @@ import asyncio
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from telegram import Update  # type: ignore[import-not-found]
-from telegram.ext import Application, CommandHandler, ContextTypes  # type: ignore[import-not-found]
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 from subscribers import init_subscribers, add_subscriber, remove_subscriber, subscriber_count
+from stats import build_report
 
 load_dotenv()
 
@@ -32,9 +33,10 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "rh_radar.db")
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
 
-# Same order as your original manual run: collect fresh data first,
-# then check each lane against it.
-SCRIPTS = ["data.py", "undervalued_early.py", "momentum.py", "launches.py"]
+# data.py discovers brand-new tokens; refresh_prices.py keeps price
+# data current for every token ever called, even after it ages out of
+# the "newest profiles" feed - both need to run before the lanes check.
+SCRIPTS = ["data.py", "refresh_prices.py", "undervalued_early.py", "momentum.py", "launches.py"]
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,6 +68,13 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("You've been unsubscribed. Send /start anytime to rejoin.")
     print(f"[bot] {chat_id} unsubscribed.")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect(DB_PATH)
+    report = build_report(conn)
+    conn.close()
+    await update.message.reply_text(report)
 
 
 def run_scan_cycle():
@@ -109,6 +118,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("stats", stats_command))
 
     print("RH Radar bot is running. Waiting for /start...")
     application.run_polling()
