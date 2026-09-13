@@ -33,6 +33,17 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "rh_radar.db")
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
 
+# --- TEMPORARY DIAGNOSTIC (safe to remove once we've confirmed the DB path) ---
+# Prints the resolved DB path and whether a file already exists there at
+# startup, so we can see exactly where data.py/bot.py are reading and
+# writing on Railway - doesn't change any behavior, just logs facts.
+print(f"[diagnostic] DB_PATH env var = {os.getenv('DB_PATH')!r}")
+print(f"[diagnostic] Resolved absolute path = {os.path.abspath(DB_PATH)}")
+print(f"[diagnostic] File exists at that path already? {os.path.exists(DB_PATH)}")
+if os.path.exists(DB_PATH):
+    print(f"[diagnostic] File size = {os.path.getsize(DB_PATH)} bytes")
+# --- END TEMPORARY DIAGNOSTIC ---
+
 # data.py discovers brand-new tokens; refresh_prices.py keeps price
 # data current for every token ever called, even after it ages out of
 # the "newest profiles" feed - both need to run before the lanes check.
