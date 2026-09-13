@@ -34,6 +34,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 from data import DB_PATH, CHAIN_ID, get_pairs_for_token, pair_age_hours
+from common import init_alert_history
 
 # Keeps each cycle fast and API-friendly - one request per token.
 MAX_TOKENS_PER_RUN = 30
@@ -126,6 +127,11 @@ def fetch_with_backoff(address, retries=1, backoff_seconds=1.5):
 
 
 def run_once(conn):
+    # Fresh database (e.g. new Railway volume) won't have alert_history
+    # yet - this script runs BEFORE the lane scripts in the pipeline, so
+    # it can't rely on one of them having created it already. Safe to
+    # call repeatedly; it's a no-op if the table already exists.
+    init_alert_history(conn)
     init_refresh_failures(conn)
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()

@@ -3,9 +3,16 @@ RH Radar - Step 1: Data Layer
 Pulls the newest token profiles on Robinhood Chain from DexScreener,
 enriches each with real pair data (liquidity, volume, mcap, age),
 and saves everything to a local SQLite database.
+
+v2 change: get_latest_robinhood_token_addresses() now retries once on
+a 429 instead of letting it crash the whole run_once() call. A single
+rate-limit blip on this one endpoint used to kill data.py's entire
+exit code for that cycle (no new tokens discovered that minute) - now
+it waits briefly and tries again before giving up.
 """
 
 import os
+import time
 import sqlite3
 import requests
 from datetime import datetime, timezone
@@ -45,18 +52,30 @@ def init_db():
     return conn
 
 
-def get_latest_robinhood_token_addresses():
-    """Fetch the newest token profiles across all chains, filter to Robinhood Chain."""
-    resp = requests.get(PROFILES_URL, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    profiles = resp.json()
+def get_latest_robinhood_token_addresses(retries=2, backoff_seconds=2.0):
+    """Fetch the newest token profiles across all chains, filter to Robinhood Chain.
 
-    if not isinstance(profiles, list):
-        print("Unexpected response shape from token-profiles endpoint:", profiles)
-        return []
+    Retries on a 429 (rate-limited) instead of raising immediately - a
+    brief rate-limit hit on this single endpoint shouldn't take down
+    the whole cycle's token discovery.
+    """
+    for attempt in range(retries + 1):
+        resp = requests.get(PROFILES_URL, headers=HEADERS, timeout=15)
+        if resp.status_code == 429 and attempt < retries:
+            print(f"  Profile endpoint rate-limited, retrying in {backoff_seconds}s...")
+            time.sleep(backoff_seconds)
+            continue
+        resp.raise_for_status()
+        profiles = resp.json()
 
-    rh_tokens = [p for p in profiles if p.get("chainId") == CHAIN_ID]
-    return rh_tokens
+        if not isinstance(profiles, list):
+            print("Unexpected response shape from token-profiles endpoint:", profiles)
+            return []
+
+        rh_tokens = [p for p in profiles if p.get("chainId") == CHAIN_ID]
+        return rh_tokens
+
+    return []
 
 
 def get_pairs_for_token(token_address):
