@@ -21,6 +21,19 @@ CHAIN_ID = "robinhood"  # DexScreener chainId slug for Robinhood Chain
 DB_PATH = os.getenv("DB_PATH", "rh_radar.db")  # /data/rh_radar.db on Railway, local file otherwise
 MIN_PRINT_LIQUIDITY = 250  # dust pools below this are saved but not printed individually
 
+# Small pause between each per-token pair request so a batch of ~10-15
+# new profiles doesn't fire as one instant burst - this was the main
+# thing tripping DexScreener's rate limit and silently dropping most
+# of a cycle's new tokens before they ever reached the database.
+PACING_SECONDS = 0.35
+
+# Addresses known to be permanently dead/ghost (confirmed via repeated
+# 429s or "not found" responses across many cycles) - skip these
+# outright instead of burning a request on them every single cycle.
+KNOWN_DEAD_TOKENS = {
+    "0x0F1254772810EA4D06E5c61E3E4b54d740367Aa8",
+}
+
 PROFILES_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
 TOKEN_PAIRS_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
 
@@ -87,6 +100,23 @@ def get_pairs_for_token(token_address):
     return data.get("pairs") or []
 
 
+def get_pairs_for_token_with_retry(token_address, retries=1, backoff_seconds=3.0):
+    """
+    Same as get_pairs_for_token, but retries once on a 429 with a pause
+    first - a single unpaced request used to mean one rate-limit hit
+    permanently dropped that token from this cycle's results.
+    """
+    for attempt in range(retries + 1):
+        try:
+            return get_pairs_for_token(token_address)
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 429 and attempt < retries:
+                time.sleep(backoff_seconds)
+                continue
+            raise
+
+
 def pair_age_hours(pair_created_at_ms):
     if not pair_created_at_ms:
         return None
@@ -107,20 +137,28 @@ def run_once(conn):
     collected_at = datetime.now(timezone.utc).isoformat()
     saved = 0
     dust_skipped_prints = 0
+    fetchable_tokens = [t for t in rh_tokens if t.get("tokenAddress") not in KNOWN_DEAD_TOKENS]
+    skipped_dead = len(rh_tokens) - len(fetchable_tokens)
+    if skipped_dead:
+        print(f"  (Skipping {skipped_dead} known-dead address(es) - not re-fetching every cycle.)")
 
-    for token in rh_tokens:
+    for i, token in enumerate(fetchable_tokens):
         address = token.get("tokenAddress")
         if not address:
             continue
 
         try:
-            pairs = get_pairs_for_token(address)
+            pairs = get_pairs_for_token_with_retry(address)
         except requests.RequestException as e:
             print(f"  Failed to fetch pairs for {address}: {e}")
+            if i < len(fetchable_tokens) - 1:
+                time.sleep(PACING_SECONDS)
             continue
 
         if not pairs:
             print(f"  {address}: profile exists but no trading pair found yet, skipping.")
+            if i < len(fetchable_tokens) - 1:
+                time.sleep(PACING_SECONDS)
             continue
 
         for pair in pairs:
@@ -166,6 +204,9 @@ def run_once(conn):
                       f"vol24h: ${volume_h24 or 0:,.0f} | mcap: ${pair.get('marketCap') or 0:,.0f} | {age_str}")
             else:
                 dust_skipped_prints += 1
+
+        if i < len(fetchable_tokens) - 1:
+            time.sleep(PACING_SECONDS)
 
     if dust_skipped_prints:
         print(f"  ... plus {dust_skipped_prints} dust pool row(s) under ${MIN_PRINT_LIQUIDITY} "

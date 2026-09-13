@@ -37,12 +37,13 @@ from data import DB_PATH, CHAIN_ID, get_pairs_for_token, pair_age_hours
 from common import init_alert_history
 
 # Keeps each cycle fast and API-friendly - one request per token.
-MAX_TOKENS_PER_RUN = 30
+# Lowered further (was 30) since data.py's own per-token fetches now
+# also compete for the same rate-limit budget within the same cycle.
+MAX_TOKENS_PER_RUN = 15
 
-# Small pause between each request so a batch of 30 doesn't fire as one
-# burst. 0.3s * 30 tokens = ~9s added to the cycle - cheap insurance
-# against tripping DexScreener's rate limit.
-REQUEST_DELAY_SECONDS = 0.3
+# Small pause between each request so a batch doesn't fire as one
+# burst. Raised slightly alongside the lower per-run cap.
+REQUEST_DELAY_SECONDS = 0.35
 
 # After this many consecutive failures, stop retrying a token every
 # cycle - it's very likely dead (delisted, ghost address, etc).
