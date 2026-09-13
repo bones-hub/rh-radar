@@ -28,17 +28,17 @@ MIN_VOL_TO_MCAP = 0.15
 MAX_SANE_PRICE_CHANGE = 500  # exclude anything above +500% in 24h as likely noise
 
 QUERY = """
-    WITH latest_collection AS (
-        SELECT MAX(collected_at) AS ts FROM raw_pairs
-    ),
-    best_pair_per_token AS (
+    -- Each token uses its OWN most recent row, not a single global
+    -- "latest collected_at" match - see launches.py for the full
+    -- explanation of why the old version silently dropped fresh
+    -- tokens.
+    WITH best_pair_per_token AS (
         SELECT r.*,
                ROW_NUMBER() OVER (
                    PARTITION BY r.token_address
-                   ORDER BY r.liquidity_usd DESC
+                   ORDER BY r.collected_at DESC, r.liquidity_usd DESC
                ) AS rn
-        FROM raw_pairs r, latest_collection lc
-        WHERE r.collected_at = lc.ts
+        FROM raw_pairs r
     )
     SELECT symbol, token_address, pair_address, dex_id, dex_url,
            liquidity_usd, volume_h24, price_change_h24,

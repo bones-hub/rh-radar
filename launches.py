@@ -27,17 +27,20 @@ MIN_LIQUIDITY = 5000
 MAX_AGE_HOURS = 3
 
 QUERY = """
-    WITH latest_collection AS (
-        SELECT MAX(collected_at) AS ts FROM raw_pairs
-    ),
-    best_pair_per_token AS (
+    -- Each token uses its OWN most recent row, not a single global
+    -- "latest collected_at" match. data.py and refresh_prices.py write
+    -- with different collected_at timestamps within the same cycle,
+    -- and refresh_prices.py (which only touches already-alerted
+    -- tokens) always runs after data.py - so requiring an exact global
+    -- timestamp match was silently excluding every brand-new token
+    -- data.py had just found that cycle.
+    WITH best_pair_per_token AS (
         SELECT r.*,
                ROW_NUMBER() OVER (
                    PARTITION BY r.token_address
-                   ORDER BY r.liquidity_usd DESC
+                   ORDER BY r.collected_at DESC, r.liquidity_usd DESC
                ) AS rn
-        FROM raw_pairs r, latest_collection lc
-        WHERE r.collected_at = lc.ts
+        FROM raw_pairs r
     )
     SELECT symbol, token_address, pair_address, dex_id, dex_url,
            liquidity_usd, volume_h24, price_change_h24,
