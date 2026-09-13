@@ -14,13 +14,15 @@ minutes) before they're shown. Every candidate is:
      you saw it - no more identical repeats clogging every scan
 """
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from verify import verify_pair_is_real
-from common import init_alert_history, get_global_duplicate_symbol_details, should_alert, flag_wash_trading_risk, format_duration, record_message_id
-from telegram_alert import send_telegram_alert, format_candidate_message, format_milestone_message
+from common import init_alert_history, get_global_duplicate_symbol_details, should_alert, flag_wash_trading_risk, format_duration
+from telegram_alert import broadcast_new_alert, broadcast_milestone_alert, format_candidate_message, format_milestone_message
+from subscribers import init_subscribers
 
-DB_PATH = "/data/rh_radar.db"
+DB_PATH = os.getenv("DB_PATH", "rh_radar.db")
 LANE = "undervalued_early"
 MIN_MCAP = 10000
 MAX_MCAP = 20000
@@ -55,6 +57,7 @@ QUERY = """
 if __name__ == "__main__":
     conn = sqlite3.connect(DB_PATH)
     init_alert_history(conn)
+    init_subscribers(conn)
 
     latest_ts = conn.execute("SELECT MAX(collected_at) FROM raw_pairs").fetchone()[0]
     raw_candidates = conn.execute(QUERY, (MIN_LIQUIDITY, MIN_MCAP, MAX_MCAP, MIN_AGE_HOURS)).fetchall()
@@ -97,12 +100,12 @@ if __name__ == "__main__":
             continue
         print("real.")
 
-        show, is_repeat, times, milestone, parent_message_id = should_alert(conn, LANE, symbol, token_address, market_cap, now_iso)
+        show, is_repeat, times, milestone = should_alert(conn, LANE, symbol, token_address, market_cap, now_iso)
         if not show:
             repeat_skipped += 1
             continue
 
-        verified_results.append((row, is_repeat, times, milestone, parent_message_id))
+        verified_results.append((row, is_repeat, times, milestone))
 
     print()
     if repeat_skipped:
@@ -112,7 +115,7 @@ if __name__ == "__main__":
         print("No new candidates survived this run.")
     else:
         print(f"{len(verified_results)} candidate(s):\n")
-        for row, is_repeat, times, milestone, parent_message_id in verified_results:
+        for row, is_repeat, times, milestone in verified_results:
             (symbol, token_address, pair_address, dex_id, dex_url,
              liquidity_usd, volume_h24, price_change_h24,
              market_cap, pair_age_hours) = row
@@ -142,9 +145,8 @@ if __name__ == "__main__":
                     token_address=token_address, priority=True
                 )
             if milestone:
-                msg_id = send_telegram_alert(message, reply_to_message_id=parent_message_id)
+                broadcast_milestone_alert(conn, token_address, message)
             else:
-                msg_id = send_telegram_alert(message)
-                record_message_id(conn, token_address, msg_id)
+                broadcast_new_alert(conn, token_address, message)
 
     conn.close()

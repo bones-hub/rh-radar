@@ -1,9 +1,12 @@
 """
 RH Radar - Shared Lane Utilities
 One alert history per TOKEN (not per token+lane) - a coin only ever
-gets one "NEW CALL" message total, even if it later qualifies for a
-different lane too. Milestone alerts reply to the original Telegram
-message so they thread together instead of floating as unlinked spam.
+triggers one "NEW CALL" broadcast total, even if it later qualifies
+for a different lane too. This file only tracks WHETHER and WHEN to
+alert (first-seen mcap, milestone multiples crossed). Per-subscriber
+message IDs (needed to thread milestone replies under each person's
+own copy of the original alert) live in subscribers.py instead, since
+that's a per-person concern, not a per-token one.
 """
 
 from datetime import datetime
@@ -16,9 +19,9 @@ def init_alert_history(conn):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_history'"
     ).fetchone()
 
-    needs_migration = existing is not None and "token_address, lane" in (existing[0] or "")
+    needs_lane_migration = existing is not None and "token_address, lane" in (existing[0] or "")
 
-    if needs_migration:
+    if needs_lane_migration:
         print("  (migrating alert_history to one-alert-per-token schema...)")
         conn.execute("ALTER TABLE alert_history RENAME TO alert_history_old")
         conn.execute("""
@@ -31,8 +34,7 @@ def init_alert_history(conn):
                 last_alert_at TEXT,
                 last_alert_mcap REAL,
                 times_alerted INTEGER,
-                last_milestone_hit REAL,
-                message_id INTEGER
+                last_milestone_hit REAL
             )
         """)
         rows = conn.execute("""
@@ -50,8 +52,8 @@ def init_alert_history(conn):
             conn.execute("""
                 INSERT OR IGNORE INTO alert_history
                     (token_address, lane, symbol, first_alert_at, first_alert_mcap,
-                     last_alert_at, last_alert_mcap, times_alerted, last_milestone_hit, message_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                     last_alert_at, last_alert_mcap, times_alerted, last_milestone_hit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, row)
         conn.execute("DROP TABLE alert_history_old")
         conn.commit()
@@ -67,14 +69,9 @@ def init_alert_history(conn):
                 last_alert_at TEXT,
                 last_alert_mcap REAL,
                 times_alerted INTEGER,
-                last_milestone_hit REAL,
-                message_id INTEGER
+                last_milestone_hit REAL
             )
         """)
-        try:
-            conn.execute("ALTER TABLE alert_history ADD COLUMN message_id INTEGER")
-        except Exception:
-            pass
         conn.commit()
 
 
@@ -83,6 +80,10 @@ def get_global_duplicate_symbols(conn, collected_at):
 
 
 def get_global_duplicate_symbol_details(conn, collected_at=None):
+    """
+    Detect symbols that map to more than one DISTINCT token_address,
+    checked across ALL raw_pairs history saved so far.
+    """
     rows = conn.execute("""
         SELECT symbol, token_address, MAX(market_cap) AS mcap, MAX(liquidity_usd) AS liq
         FROM raw_pairs
@@ -103,6 +104,7 @@ def flag_wash_trading_risk(liquidity_usd, volume_h24):
 
 
 def format_duration(seconds):
+    """Turn a raw second count into a short human string like '47m' or '2h 15m'."""
     seconds = max(0, int(seconds))
     if seconds < 60:
         return f"{seconds}s"
@@ -118,30 +120,17 @@ def format_duration(seconds):
     return f"{days}d {rem_h}h" if rem_h else f"{days}d"
 
 
-def record_message_id(conn, token_address, message_id):
-    """Store the Telegram message_id of a token's first ('NEW') alert so
-    later milestone alerts can reply/quote it. Only fills it in if empty."""
-    if message_id is None:
-        return
-    conn.execute("""
-        UPDATE alert_history SET message_id = ?
-        WHERE token_address = ? AND message_id IS NULL
-    """, (message_id, token_address))
-    conn.commit()
-
-
 def should_alert(conn, lane, symbol, token_address, market_cap, now_iso):
     """
-    Now keyed on token_address ONLY - a token alerted in one lane will
-    never trigger a second "NEW" alert just because it later qualifies
-    for a different lane too.
+    Keyed on token_address ONLY - a token alerted in one lane will never
+    trigger a second "NEW" alert just because it later qualifies for a
+    different lane too. Only re-alerts on real milestone multiples
+    (2x, 3x, 5x, 10x, 20x, 50x, 100x) of its first-seen mcap.
 
-    Returns (should_show, is_repeat, times_alerted, milestone_info, parent_message_id).
-    parent_message_id is the Telegram message_id of the original NEW
-    alert, used to reply/thread milestone messages under it.
+    Returns (should_show, is_repeat, times_alerted, milestone_info).
     """
     row = conn.execute("""
-        SELECT first_alert_at, first_alert_mcap, times_alerted, last_milestone_hit, message_id
+        SELECT first_alert_at, first_alert_mcap, times_alerted, last_milestone_hit
         FROM alert_history WHERE token_address = ?
     """, (token_address,)).fetchone()
 
@@ -149,17 +138,17 @@ def should_alert(conn, lane, symbol, token_address, market_cap, now_iso):
         conn.execute("""
             INSERT INTO alert_history
                 (token_address, lane, symbol, first_alert_at, first_alert_mcap,
-                 last_alert_at, last_alert_mcap, times_alerted, last_milestone_hit, message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, NULL)
+                 last_alert_at, last_alert_mcap, times_alerted, last_milestone_hit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)
         """, (token_address, lane, symbol, now_iso, market_cap, now_iso, market_cap))
         conn.commit()
-        return True, False, 1, None, None
+        return True, False, 1, None
 
-    first_alert_at, first_alert_mcap, times_alerted, last_milestone_hit, message_id = row
+    first_alert_at, first_alert_mcap, times_alerted, last_milestone_hit = row
     last_milestone_hit = last_milestone_hit or 1
 
     if not first_alert_mcap or first_alert_mcap <= 0 or not market_cap:
-        return False, True, times_alerted, None, message_id
+        return False, True, times_alerted, None
 
     current_multiple = market_cap / first_alert_mcap
 
@@ -169,7 +158,7 @@ def should_alert(conn, lane, symbol, token_address, market_cap, now_iso):
             milestone_hit = m
 
     if milestone_hit is None:
-        return False, True, times_alerted, None, message_id
+        return False, True, times_alerted, None
 
     times_alerted += 1
     try:
@@ -190,4 +179,4 @@ def should_alert(conn, lane, symbol, token_address, market_cap, now_iso):
         "multiple": milestone_hit,
         "elapsed_seconds": elapsed_seconds,
         "first_mcap": first_alert_mcap,
-    }, message_id
+    }

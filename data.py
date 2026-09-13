@@ -3,18 +3,15 @@ RH Radar - Step 1: Data Layer
 Pulls the newest token profiles on Robinhood Chain from DexScreener,
 enriches each with real pair data (liquidity, volume, mcap, age),
 and saves everything to a local SQLite database.
-
-Run this alone first to confirm we're actually seeing Robinhood Chain
-launches before we build scoring on top of it.
 """
 
+import os
 import sqlite3
-import time
 import requests
 from datetime import datetime, timezone
 
 CHAIN_ID = "robinhood"  # DexScreener chainId slug for Robinhood Chain
-DB_PATH = "/data/rh_radar.db"
+DB_PATH = os.getenv("DB_PATH", "rh_radar.db")  # /data/rh_radar.db on Railway, local file otherwise
 MIN_PRINT_LIQUIDITY = 250  # dust pools below this are saved but not printed individually
 
 PROFILES_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
@@ -85,7 +82,7 @@ def run_once(conn):
 
     if not rh_tokens:
         print("No Robinhood Chain tokens in the latest profiles batch. "
-              "This is normal if launches are infrequent — we'll rerun this on a loop later.")
+              "This is normal if launches are infrequent - we'll rerun this on a loop.")
         return
 
     collected_at = datetime.now(timezone.utc).isoformat()
@@ -157,10 +154,9 @@ def run_once(conn):
 
     conn.commit()
 
-    # Safety check: if the same token_address is shared by more than one
-    # distinct symbol in this batch, it's a placeholder/unresolved address
-    # (like DexScreener's V4 indexing artifact) - remove it entirely rather
-    # than risk showing an unreliable address for trading.
+    # Safety check: remove any token_address shared by more than one
+    # distinct symbol in this batch - almost always an unresolved
+    # placeholder address, not a real trading pair.
     bad_addresses = conn.execute("""
         SELECT token_address, COUNT(DISTINCT symbol) AS symbol_count
         FROM raw_pairs
