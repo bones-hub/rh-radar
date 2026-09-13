@@ -65,18 +65,24 @@ def init_db():
     return conn
 
 
-def get_latest_robinhood_token_addresses(retries=2, backoff_seconds=2.0):
+def get_latest_robinhood_token_addresses(retries=4, backoff_seconds=3.0):
     """Fetch the newest token profiles across all chains, filter to Robinhood Chain.
 
     Retries on a 429 (rate-limited) instead of raising immediately - a
     brief rate-limit hit on this single endpoint shouldn't take down
-    the whole cycle's token discovery.
+    the whole cycle's token discovery. Retries/backoff raised (was
+    2 retries / 2.0s) - a fresh container redeploy tends to hit this
+    endpoint harder right at startup, and 2 quick retries wasn't
+    always enough to ride out that initial spike. Backoff also
+    increases each attempt (3s, 6s, 9s, 12s) instead of a fixed delay.
     """
     for attempt in range(retries + 1):
         resp = requests.get(PROFILES_URL, headers=HEADERS, timeout=15)
         if resp.status_code == 429 and attempt < retries:
-            print(f"  Profile endpoint rate-limited, retrying in {backoff_seconds}s...")
-            time.sleep(backoff_seconds)
+            wait = backoff_seconds * (attempt + 1)
+            print(f"  Profile endpoint rate-limited, retrying in {wait}s... "
+                  f"(attempt {attempt + 1}/{retries})")
+            time.sleep(wait)
             continue
         resp.raise_for_status()
         profiles = resp.json()
